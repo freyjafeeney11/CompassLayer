@@ -149,4 +149,4 @@ assets/results/
 out_*.png
 result_*.png
 test_*.py
-*centered.png
+# *centered.png (We want to track our processed templates)
