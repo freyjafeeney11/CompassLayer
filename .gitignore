@@ -148,6 +148,7 @@ cython_debug/
 # Ignore all content in assets except for the icons folder
 assets/*
 !assets/icons/
+!assets/audio/
 
 # General patterns to ignore
 out_*.png

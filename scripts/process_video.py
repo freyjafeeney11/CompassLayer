@@ -18,6 +18,7 @@ from config import (
 )
 from core.detector import IconDetector
 from core.ocr_engine import OCREngine
+from core.audiofeedback import NavigationController, from_algo_batch
 from utils.visualizer import Visualizer
 
 
@@ -25,9 +26,12 @@ def process_video(
     input_video_path: str,
     output_video_path: str = None,
     preview: bool = False,
+    audio_feedback: bool = False,
+    realtime_audio: bool = False,
 ) -> None:
     """
     离线处理游戏录像视频，在画面上绘制识别框并导出新的视频。
+    可选开启音频反馈（空间声+提示音）。
     """
     if not os.path.exists(input_video_path):
         print(f"错误: 找不到输入视频文件 {input_video_path}")
@@ -65,6 +69,7 @@ def process_video(
     )
     ocr_engine = OCREngine()
     visualizer = Visualizer("Video Processing Preview")
+    nav = NavigationController() if audio_feedback else None
 
     def normalize_coord(px_x: float, px_y: float):
         return px_x / width, px_y / height
@@ -72,6 +77,7 @@ def process_video(
     capture_height = int(height * ROI_HEIGHT_RATIO)
     frame_count = 0
     start_time = time.time()
+    audio_start_time = time.time()
 
     while cap.isOpened():
         ret, frame = cap.read()
@@ -128,6 +134,19 @@ def process_video(
                 }
             )
 
+        # 4.1 音频反馈（可选）
+        if nav is not None and output_list:
+            nav_icons = from_algo_batch(output_list)
+            nav.update(nav_icons)
+
+            # 让离线处理按视频帧率节奏播放声音，避免过快连发
+            if realtime_audio and fps > 0:
+                target_elapsed = frame_count / fps
+                actual_elapsed = time.time() - audio_start_time
+                delay = target_elapsed - actual_elapsed
+                if delay > 0:
+                    time.sleep(delay)
+
         # 5. 可视化绘制并写入
         frame_visualized = visualizer.draw_detections(
             frame, detections, screen_width=width, screen_height=height
@@ -147,6 +166,8 @@ def process_video(
     cap.release()
     out.release()
     cv2.destroyAllWindows()
+    if nav is not None:
+        nav.stop()
 
     elapsed = time.time() - start_time
     print(f"\n\n处理完成! 导出的视频已保存至: {output_video_path}")
@@ -159,10 +180,14 @@ if __name__ == "__main__":
     parser.add_argument("input", help="输入的视频文件路径")
     parser.add_argument("-o", "--output", help="导出视频路径（可选）", default=None)
     parser.add_argument("--preview", action="store_true", help="显示实时预览窗口")
+    parser.add_argument("--audio", action="store_true", help="启用音频反馈")
+    parser.add_argument("--realtime-audio", action="store_true", help="按视频原始帧率节奏播放音频")
     args = parser.parse_args()
 
     process_video(
         args.input,
         args.output,
         preview=args.preview,
+        audio_feedback=args.audio,
+        realtime_audio=args.realtime_audio,
     )

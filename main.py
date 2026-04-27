@@ -7,6 +7,7 @@ from core.screen import ScreenCapturer
 from core.detector import IconDetector
 from core.ocr_engine import OCREngine
 from utils.visualizer import Visualizer
+from core.audiofeedback import NavigationController, from_algo_batch
 
 def play_audio_feedback(rel_offset: float) -> None:
     """
@@ -28,6 +29,7 @@ def main() -> None:
     
     ocr_engine = OCREngine()
     visualizer = Visualizer()
+    controller = NavigationController()
     
     print(f"初始化完毕。屏幕总分辨率: {screen_info['width']}x{screen_info['height']}")
     print("（按 'q' 键退出程序）")
@@ -100,6 +102,11 @@ def main() -> None:
                     "distance": dist_text
                 })
                 
+            # 3.1 音频反馈
+            if output_list:
+                nav_icons = from_algo_batch(output_list)
+                controller.update(nav_icons)
+                
             # 4. 打印清理后的数据 (增加 flush=True 确保实时显示)
             if output_list:
                 print(output_list, flush=True)
@@ -124,11 +131,15 @@ def main() -> None:
             if key == ord('q'):
                 print("检测到退出指令，程序即将终止。")
                 break
+            elif key == ord(' '):  # 空格键触发全屏扫描模式
+                if output_list:
+                    controller.scan(from_algo_batch(output_list))
                 
     except Exception as e:
         print(f"发生异常: {e}")
     finally:
         cv2.destroyAllWindows()
+        controller.stop()
         print("所有资源已释放。")
 
 if __name__ == "__main__":
