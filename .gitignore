@@ -144,9 +144,12 @@ cython_debug/
 # OS X
 .DS_Store
 
-# Icons and ScreenShots (Optional: user might want to keep assets but ignore temporary output)
-assets/results/
+# Assets
+# Ignore all content in assets except for the icons folder
+assets/*
+!assets/icons/
+
+# General patterns to ignore
 out_*.png
 result_*.png
 test_*.py
-# *centered.png (We want to track our processed templates)

@@ -1,7 +1,8 @@
 import cv2
+import time
 from typing import List, Dict, Any
 
-from config import TARGET_ICONS, MATCH_THRESHOLD, NMS_IOU_THRESHOLD, STRAIGHT_AHEAD_THRESHOLD
+from config import TARGET_ICONS, MATCH_THRESHOLD, NMS_IOU_THRESHOLD, STRAIGHT_AHEAD_THRESHOLD, COMPASS_WIDTH_RATIO, ROI_HEIGHT_RATIO, BLUR_KSIZE
 from core.screen import ScreenCapturer
 from core.detector import IconDetector
 from core.ocr_engine import OCREngine
@@ -16,7 +17,7 @@ def play_audio_feedback(rel_offset: float) -> None:
 
 def main() -> None:
     print("正在初始化纯比例运算系统组件...")
-    screen_capturer = ScreenCapturer(monitor_idx=1)
+    screen_capturer = ScreenCapturer(roi_height_ratio=ROI_HEIGHT_RATIO, monitor_idx=1)
     screen_info = screen_capturer.get_screen_info()
     
     detector = IconDetector(
@@ -31,8 +32,13 @@ def main() -> None:
     print(f"初始化完毕。屏幕总分辨率: {screen_info['width']}x{screen_info['height']}")
     print("（按 'q' 键退出程序）")
 
+    frame_count = 0
+    last_print_time = time.time()
+
     try:
         while True:
+            start_time = time.time()
+            frame_count += 1
             # 1. 获取屏幕局部画面
             frame_bgr = screen_capturer.get_frame()
             
@@ -43,7 +49,8 @@ def main() -> None:
                 screen_width=screen_info["width"], 
                 screen_height=screen_info["height"],
                 normalize_fn=screen_capturer.normalize_coord,
-                use_laplacian=True
+                use_laplacian=False,
+                blur_ksize=BLUR_KSIZE
             )
             
             output_list: List[Dict[str, Any]] = []
@@ -55,8 +62,9 @@ def main() -> None:
                 icon_w_rel = det["w_rel"]
                 icon_h_rel = det["h_rel"]
 
-                # 数学优势：正中心的偏移为 0.0，从 -0.5 (纯左) 到 +0.5 (纯右)
-                relative_offset = icon_x_rel - 0.5
+                # 数学修正：相对于导航条宽度的偏移
+                # 0.0 (中心), -0.5 (导航条最左), +0.5 (导航条最右)
+                relative_offset = (icon_x_rel - 0.5) / COMPASS_WIDTH_RATIO
                 det["rel_offset"] = relative_offset
                 
                 # 播放音频接口
@@ -92,9 +100,16 @@ def main() -> None:
                     "distance": dist_text
                 })
                 
-            # 4. 打印清理后的数据
+            # 4. 打印清理后的数据 (增加 flush=True 确保实时显示)
             if output_list:
-                print(output_list)
+                print(output_list, flush=True)
+            
+            # 性能监控：每 30 帧打印一次运行状态（约每 1-2 秒）
+            if frame_count % 30 == 0:
+                elapsed = time.time() - last_print_time
+                fps = 30 / elapsed
+                print(f"[Debug] 已处理 {frame_count} 帧 | 当前平均速度: {fps:.2f} FPS", flush=True)
+                last_print_time = time.time()
                 
             # 5. 可视化绘制 (Adaptive UI 根据屏幕分辨率动态缩放)
             frame_visualized = visualizer.draw_detections(
