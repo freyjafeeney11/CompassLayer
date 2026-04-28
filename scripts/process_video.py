@@ -28,6 +28,7 @@ def process_video(
     preview: bool = False,
     audio_feedback: bool = False,
     realtime_audio: bool = False,
+    export_audio: bool = False,
 ) -> None:
     """
     离线处理游戏录像视频，在画面上绘制识别框并导出新的视频。
@@ -54,7 +55,12 @@ def process_video(
 
     # 2. 设置视频导出器
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-    out = cv2.VideoWriter(output_video_path, fourcc, fps, (width, height))
+    
+    if export_audio:
+        temp_video_path = output_video_path.replace(".mp4", "_temp_visual.mp4")
+        out = cv2.VideoWriter(temp_video_path, fourcc, fps, (width, height))
+    else:
+        out = cv2.VideoWriter(output_video_path, fourcc, fps, (width, height))
 
     print(f"开始处理视频: {input_video_path}")
     print(f"分辨率: {width}x{height} | 帧率: {fps:.2f} | 总帧数: {total_frames}")
@@ -70,6 +76,12 @@ def process_video(
     ocr_engine = OCREngine()
     visualizer = Visualizer("Video Processing Preview")
     nav = NavigationController() if audio_feedback else None
+    
+    offline_nav = None
+    if export_audio:
+        from core.offline_audio import OfflineNavigationController
+        total_duration_sec = total_frames / fps if fps > 0 else 0
+        offline_nav = OfflineNavigationController(total_duration_sec)
 
     def normalize_coord(px_x: float, px_y: float):
         return px_x / width, px_y / height
@@ -147,6 +159,11 @@ def process_video(
                 if delay > 0:
                     time.sleep(delay)
 
+        if offline_nav is not None and output_list:
+            nav_icons = from_algo_batch(output_list)
+            current_time = frame_count / fps if fps > 0 else 0
+            offline_nav.update(nav_icons, current_time)
+
         # 5. 可视化绘制并写入
         frame_visualized = visualizer.draw_detections(
             frame, detections, screen_width=width, screen_height=height
@@ -169,6 +186,34 @@ def process_video(
     if nav is not None:
         nav.stop()
 
+    if export_audio:
+        import subprocess
+        temp_audio_path = output_video_path.replace(".mp4", "_temp_audio.wav")
+        print("\n正在生成离线音频...")
+        offline_nav.export(temp_audio_path)
+        
+        print(f"正在合成视频与音频，输出到: {output_video_path}")
+        try:
+            import imageio_ffmpeg
+            ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
+            cmd = [
+                ffmpeg_path,
+                "-y",
+                "-i", temp_video_path,
+                "-i", temp_audio_path,
+                "-c:v", "copy",
+                "-c:a", "aac",
+                output_video_path
+            ]
+            subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            try:
+                os.remove(temp_audio_path)
+                os.remove(temp_video_path)
+            except Exception:
+                pass
+        except Exception as e:
+            print(f"合成视频时出错: {e}")
+
     elapsed = time.time() - start_time
     print(f"\n\n处理完成! 导出的视频已保存至: {output_video_path}")
     if elapsed > 0:
@@ -182,6 +227,7 @@ if __name__ == "__main__":
     parser.add_argument("--preview", action="store_true", help="显示实时预览窗口")
     parser.add_argument("--audio", action="store_true", help="启用音频反馈")
     parser.add_argument("--realtime-audio", action="store_true", help="按视频原始帧率节奏播放音频")
+    parser.add_argument("--export-audio", action="store_true", help="将生成的空间音频写入输出的视频文件中")
     args = parser.parse_args()
 
     process_video(
@@ -190,4 +236,5 @@ if __name__ == "__main__":
         preview=args.preview,
         audio_feedback=args.audio,
         realtime_audio=args.realtime_audio,
+        export_audio=args.export_audio,
     )

@@ -324,6 +324,7 @@ class AudioEngine:
         audio_dir = os.path.join(base_dir, "assets", "audio")
 
         self.quest_sound     = self._load(os.path.join(audio_dir, "koto_note.wav"),      self.VOLUME_QUEST)
+        self.quest_sound_center = self._load(self._get_or_create_center_sound(audio_dir), self.VOLUME_QUEST)
         self.treasure_sound  = self._load(os.path.join(audio_dir, "koto_trill.wav"),     self.VOLUME_TREASURE)
         self.stockpile_sound = self._load(os.path.join(audio_dir, "koto_stockpile.wav"), self.VOLUME_STOCKPILE)
 
@@ -337,10 +338,33 @@ class AudioEngine:
     # ── Sound loading ───────────────────────────────────────────────
 
     def _load(self, filename: str, volume: float) -> pygame.mixer.Sound:
+        if not os.path.exists(filename):
+            print(f"  ⚠  Missing audio file: {filename}")
+            # Return an empty dummy sound to prevent crashes if missing
+            return pygame.mixer.Sound(np.zeros((100, 2), dtype=np.int16))
         sound = pygame.mixer.Sound(filename)
         sound.set_volume(volume)
         print(f"  ✓ Loaded {filename}")
         return sound
+
+    def _get_or_create_center_sound(self, audio_dir: str) -> str:
+        orig_path = os.path.join(audio_dir, "koto_note.wav")
+        center_path = os.path.join(audio_dir, "koto_note_center.wav")
+        if not os.path.exists(center_path) and os.path.exists(orig_path):
+            import scipy.io.wavfile as wavfile
+            sr, data = wavfile.read(orig_path)
+            # Pitch up by 1 semitone (~5.9% faster)
+            factor = 2 ** (1.0 / 12.0)
+            orig_indices = np.arange(len(data))
+            new_indices = np.linspace(0, len(data) - 1, int(len(data) / factor))
+            if len(data.shape) == 2:
+                new_data = np.zeros((len(new_indices), 2), dtype=data.dtype)
+                new_data[:, 0] = np.interp(new_indices, orig_indices, data[:, 0])
+                new_data[:, 1] = np.interp(new_indices, orig_indices, data[:, 1])
+            else:
+                new_data = np.interp(new_indices, orig_indices, data).astype(data.dtype)
+            wavfile.write(center_path, sr, new_data)
+        return center_path if os.path.exists(center_path) else orig_path
 
     # ── Equal-power panning ─────────────────────────────────────────
 
@@ -380,10 +404,11 @@ class AudioEngine:
     def _pulse_interval(self, distance_m: float) -> float:
         """
         Map distance → pulse interval (seconds).
-        5m → ~0.4s  |  27m → ~1.0s  |  100m → ~2.5s
+        Exponential curve: floors at 0.25s (not too annoying) and maxes around 2.5s
         """
         distance_m = max(1.0, distance_m)
-        return round(0.40 + (distance_m / 100.0) * 2.10, 2)
+        interval = 2.5 * ((distance_m / 100.0) ** 0.8)
+        return round(max(0.25, min(3.0, interval)), 2)
 
     # ── Continuous quest pulse ──────────────────────────────────────
 
@@ -412,7 +437,9 @@ class AudioEngine:
                 icon   = self._current_icon
             if not active or icon is None:
                 break
-            self._pan_sound(self.quest_sound, icon)
+            
+            sound_to_play = self.quest_sound_center if icon.direction == "center" else self.quest_sound
+            self._pan_sound(sound_to_play, icon)
             time.sleep(self._pulse_interval(icon.distance_m))
 
     # ── Treasure earcon ─────────────────────────────────────────────
@@ -445,7 +472,8 @@ class AudioEngine:
 
         for icon in sorted_icons:
             if icon.icon_type == "main_quest":
-                self._pan_sound(self.quest_sound, icon)
+                sound_to_play = self.quest_sound_center if icon.direction == "center" else self.quest_sound
+                self._pan_sound(sound_to_play, icon)
             elif icon.icon_type == "treasure":
                 self._pan_sound(self.treasure_sound, icon)
             elif icon.icon_type == "stockpile":
@@ -470,25 +498,16 @@ class AudioEngine:
 class NavigationController:
     """
     Orchestrates all icons: runs the quest pulse continuously,
-    fires treasure/stockpile earcons on proximity threshold, handles scan mode.
-
-    Stockpile design rationale
-    --------------------------
-    Barrels cluster heavily in castle/village areas, so ambient alerts use a
-    tighter proximity window (15 m vs 30 m for treasure) and a longer cooldown
-    (20 s vs 8 s).  The primary discovery path for stockpiles is scan mode.
+    fires treasure/stockpile earcons on distance thresholds, handles scan mode.
     """
 
-    TREASURE_EARCON_COOLDOWN      = 8.0    # seconds
-    TREASURE_PROXIMITY_THRESHOLD  = 30.0   # metres
-
-    STOCKPILE_EARCON_COOLDOWN     = 20.0   # longer — stockpiles cluster
-    STOCKPILE_PROXIMITY_THRESHOLD = 15.0   # tighter — only when very close
+    TREASURE_THRESHOLDS  = [30.0, 20.0, 10.0, 5.0]
+    STOCKPILE_THRESHOLDS = [15.0, 10.0, 5.0]
 
     def __init__(self):
         self.audio = AudioEngine()
-        self._last_treasure_alert = 0.0
-        self._last_stockpile_alert: dict[str, float] = {}
+        self._last_treasure_dist = 999.0
+        self._last_stockpile_dist = 999.0
 
     def update(self, icons: list[NavIcon]):
         quest     = next((i for i in icons if i.icon_type == "main_quest"), None)
@@ -501,21 +520,24 @@ class NavigationController:
                 self.audio.start_quest_pulse(quest)
 
         if treasure:
-            now          = time.time()
-            close_enough = treasure.distance_m <= self.TREASURE_PROXIMITY_THRESHOLD
-            cooled_down  = (now - self._last_treasure_alert) > self.TREASURE_EARCON_COOLDOWN
-            if close_enough and cooled_down:
-                self.audio.play_treasure_earcon(treasure)
-                self._last_treasure_alert = now
+            active_thresh = [t for t in self.TREASURE_THRESHOLDS if treasure.distance_m <= t]
+            if active_thresh:
+                closest = min(active_thresh)
+                if closest < self._last_treasure_dist:
+                    self.audio.play_treasure_earcon(treasure)
+                    self._last_treasure_dist = closest
+            else:
+                self._last_treasure_dist = 999.0
 
         if stockpile:
-            now          = time.time()
-            close_enough = stockpile.distance_m <= self.STOCKPILE_PROXIMITY_THRESHOLD
-            last_alert   = self._last_stockpile_alert.get("ambient", 0.0)
-            cooled_down  = (now - last_alert) > self.STOCKPILE_EARCON_COOLDOWN
-            if close_enough and cooled_down:
-                self.audio.play_stockpile_earcon(stockpile)
-                self._last_stockpile_alert["ambient"] = now
+            active_thresh = [t for t in self.STOCKPILE_THRESHOLDS if stockpile.distance_m <= t]
+            if active_thresh:
+                closest = min(active_thresh)
+                if closest < self._last_stockpile_dist:
+                    self.audio.play_stockpile_earcon(stockpile)
+                    self._last_stockpile_dist = closest
+            else:
+                self._last_stockpile_dist = 999.0
 
     def scan(self, icons: list[NavIcon]):
         """Player-triggered scan — audio sweep + TTS, blocks until fully spoken."""
