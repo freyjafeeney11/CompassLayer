@@ -102,9 +102,7 @@ class OfflineAudioRenderer:
         self.audio_buffer[start_idx:end_idx] += panned_sound
         
     def export_wav(self, output_path: str):
-        # Clip to prevent distortion from overlapping sounds
         final_audio = np.clip(self.audio_buffer, -1.0, 1.0)
-        # Convert back to int16 for WAV export
         final_audio_int16 = (final_audio * 32767).astype(np.int16)
         wavfile.write(output_path, self.SAMPLE_RATE, final_audio_int16)
 

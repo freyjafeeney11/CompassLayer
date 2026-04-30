@@ -4,13 +4,13 @@ AC Shadows - Audio Navigation Accessibility Tool
 Provides spatial audio feedback for blind/visually impaired players.
 
 SETUP:
-    pip install pygame numpy pyttsx3
+    pip install pyo numpy pyttsx3
 
 AUDIO FILES:
     Place GarageBand exports in the same folder as this script:
-        - koto_note.wav       → main quest pulse tone
-        - koto_trill.wav      → treasure earcon
-        - koto_stockpile.wav  → stockpile earcon
+        - koto_note.wav       -> main quest pulse tone
+        - koto_trill.wav      -> treasure earcon
+        - koto_stockpile.wav  -> stockpile earcon
 
 HOW IT WORKS:
     - Main quest icon:  continuous panning pulse, rate increases as you get closer
@@ -26,7 +26,7 @@ PANNING NOTES:
     consistent across the stereo field — no harsh jump between ears.
 """
 
-import pygame
+import pyo
 import numpy as np
 import time
 import threading
@@ -51,7 +51,7 @@ class NavIcon:
     """Represents a single icon on the AC Shadows compass bar."""
     icon_type:  str    # "main_quest" | "treasure" | "stockpile"
     direction:  str    # "left" | "right" | "center"
-    offset:     float  # 0.0 (center) → 1.0 (far edge)
+    offset:     float  # 0.0 (center) -> 1.0 (far edge)
     distance_m: float  # distance in metres, e.g. 27.0
 
 
@@ -141,8 +141,8 @@ class TTSEngine:
     pyttsx3 is kept as a fallback if pywin32 is not installed.
 
     Install:
-        pip install pywin32      ← preferred
-        pip install pyttsx3      ← fallback
+        pip install pywin32      <- preferred
+        pip install pyttsx3      <- fallback
     """
 
     def __init__(self):
@@ -167,15 +167,15 @@ class TTSEngine:
                     desc  = token.GetDescription().lower()
                     if any(hint in desc for hint in FR_HINTS):
                         self._fr_voice_token = token
-                        print(f"  ✓ TTS voice: {token.GetDescription()}")
+                        print(f"  [+] TTS voice: {token.GetDescription()}")
                         break
                 if self._fr_voice_token is None:
-                    print("  ℹ  No French SAPI5 voice found — using system default. "
+                    print("  [i]  No French SAPI5 voice found — using system default. "
                           "Install 'Microsoft Hortense Desktop' from Windows language settings.")
             except Exception:
                 pass
 
-            print("  ✓ TTS engine ready (win32com / SAPI5)")
+            print("  [+] TTS engine ready (win32com / SAPI5)")
             return
         except ImportError:
             pass
@@ -192,16 +192,16 @@ class TTSEngine:
                     if any(hint in v.name.lower() or hint in v.id.lower()
                            for hint in FR_HINTS):
                         engine.setProperty('voice', v.id)
-                        print(f"  ✓ TTS voice: {v.name}")
+                        print(f"  [+] TTS voice: {v.name}")
                         break
                 else:
-                    print("  ℹ  No French voice found in pyttsx3 — using default.")
+                    print("  [i]  No French voice found in pyttsx3 — using default.")
                 self._pyttsx3_engine = engine
                 self._backend = "pyttsx3"
                 self._active  = True
-                print("  ✓ TTS engine ready (pyttsx3 fallback)")
+                print("  [+] TTS engine ready (pyttsx3 fallback)")
             except Exception as e:
-                print(f"  ⚠  TTS init failed: {e}")
+                print(f"  [!]  TTS init failed: {e}")
         else:
             print("  No TTS backend available (install pywin32 or pyttsx3)")
 
@@ -304,29 +304,27 @@ def _build_tts_phrase(icon: NavIcon) -> str:
 # ─────────────────────────────────────────────
 
 class AudioEngine:
-    """Handles all spatial audio output with equal-power stereo panning."""
+    """Handles all spatial audio output with pyo (Binaural HRTF)."""
 
     SAMPLE_RATE = 44100
 
-    # Adjust these to taste — audio files are already edited to sound right,
-    # these just scale the final output level.
+    # Volume Levels
     VOLUME_QUEST     = 0.4
-    VOLUME_TREASURE  = 0.4
-    VOLUME_STOCKPILE = 0.2
+    VOLUME_TREASURE  = 2.5  # Heavily boosted to compensate for quiet source file
+    VOLUME_STOCKPILE = 0.15 # Lowered to keep ambient footprint minimal
 
     def __init__(self):
-        pygame.mixer.pre_init(self.SAMPLE_RATE, -16, 2, 512)
-        pygame.init()
-        pygame.mixer.set_num_channels(16)
+        # Boot pyo server for real-time DSP and HRTF
+        self.server = pyo.Server(audio="portaudio", sr=self.SAMPLE_RATE, duplex=0).boot()
+        self.server.start()
 
         # Set up paths relative to this file's location (core/audiofeedback.py)
         base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         audio_dir = os.path.join(base_dir, "assets", "audio")
 
-        self.quest_sound     = self._load(os.path.join(audio_dir, "koto_note.wav"),      self.VOLUME_QUEST)
-        self.quest_sound_center = self._load(self._get_or_create_center_sound(audio_dir), self.VOLUME_QUEST)
-        self.treasure_sound  = self._load(os.path.join(audio_dir, "koto_trill.wav"),     self.VOLUME_TREASURE)
-        self.stockpile_sound = self._load(os.path.join(audio_dir, "koto_stockpile.wav"), self.VOLUME_STOCKPILE)
+        self.quest     = self._load(os.path.join(audio_dir, "koto_note.wav"),      self.VOLUME_QUEST)
+        self.treasure  = self._load(os.path.join(audio_dir, "koto_trill.wav"),     self.VOLUME_TREASURE)
+        self.stockpile = self._load(os.path.join(audio_dir, "koto_stockpile.wav"), self.VOLUME_STOCKPILE)
 
         self.tts = TTSEngine()
 
@@ -335,75 +333,56 @@ class AudioEngine:
         self._current_icon: Optional[NavIcon] = None
         self._lock = threading.Lock()
 
+    def shutdown(self):
+        self.server.stop()
+        self.server.shutdown()
+
     # ── Sound loading ───────────────────────────────────────────────
 
-    def _load(self, filename: str, volume: float) -> pygame.mixer.Sound:
+    def _load(self, filename: str, volume: float) -> Optional[dict]:
         if not os.path.exists(filename):
-            print(f"  ⚠  Missing audio file: {filename}")
-            # Return an empty dummy sound to prevent crashes if missing
-            return pygame.mixer.Sound(np.zeros((100, 2), dtype=np.int16))
-        sound = pygame.mixer.Sound(filename)
-        sound.set_volume(volume)
-        print(f"  ✓ Loaded {filename}")
-        return sound
+            print(f"  [!] Missing audio file: {filename}")
+            return None
+            
+        sf = pyo.SfPlayer(filename, loop=False)
+        sf.stop()
+        sf_mono = sf.mix(1) # Mix to mono for HRTF
+        
+        # Apply initial volume scaling
+        amp = pyo.Sig(volume)
+        binaural = pyo.Binaural(sf_mono * amp, azimuth=0, elevation=0).out()
+        
+        print(f"  [+] Loaded {filename}")
+        return {"sf": sf, "binaural": binaural, "amp": amp, "vol": volume}
 
-    def _get_or_create_center_sound(self, audio_dir: str) -> str:
-        orig_path = os.path.join(audio_dir, "koto_note.wav")
-        center_path = os.path.join(audio_dir, "koto_note_center.wav")
-        if not os.path.exists(center_path) and os.path.exists(orig_path):
-            import scipy.io.wavfile as wavfile
-            sr, data = wavfile.read(orig_path)
-            # Pitch up by 1 semitone (~5.9% faster)
-            factor = 2 ** (1.0 / 12.0)
-            orig_indices = np.arange(len(data))
-            new_indices = np.linspace(0, len(data) - 1, int(len(data) / factor))
-            if len(data.shape) == 2:
-                new_data = np.zeros((len(new_indices), 2), dtype=data.dtype)
-                new_data[:, 0] = np.interp(new_indices, orig_indices, data[:, 0])
-                new_data[:, 1] = np.interp(new_indices, orig_indices, data[:, 1])
-            else:
-                new_data = np.interp(new_indices, orig_indices, data).astype(data.dtype)
-            wavfile.write(center_path, sr, new_data)
-        return center_path if os.path.exists(center_path) else orig_path
+    # ── HRTF Panning & Pitch ────────────────────────────────────────
 
-    # ── Equal-power panning ─────────────────────────────────────────
-
-    def _pan_sound(self, sound: pygame.mixer.Sound, icon: NavIcon,
-                   volume_override: Optional[float] = None) -> pygame.mixer.Channel:
-        """
-        pan ∈ [-1, 1]:  -1 = hard left, 0 = center, +1 = hard right
-
-        Equal-power law:
-            left_gain  = cos(θ)   where θ = (pan+1)/2 * π/2
-            right_gain = sin(θ)
-        Keeps perceived loudness constant across the stereo field.
-        """
+    def _play_sound(self, player: Optional[dict], icon: NavIcon, volume_override: Optional[float] = None, is_center: bool = False):
+        if not player: return
+        
+        # Azimuth mapping for Binaural: center=0, right=+90, left=-90
         if icon.direction == "center":
-            pan = 0.0
+            azimuth = 0.0
+        elif icon.direction == "right":
+            azimuth = min(1.0, icon.offset) * 90.0
         elif icon.direction == "left":
-            pan = -min(1.0, icon.offset)
-        else:
-            pan =  min(1.0, icon.offset)
-
-        theta      = (pan + 1.0) / 2.0 * (np.pi / 2.0)
-        left_gain  = float(np.cos(theta))
-        right_gain = float(np.sin(theta))
-
-        if volume_override is not None:
-            left_gain  *= volume_override
-            right_gain *= volume_override
-
-        channel = pygame.mixer.find_channel(True)
-        if channel:
-            channel.set_volume(left_gain, right_gain)
-            channel.play(sound)
-        return channel
+            azimuth = -min(1.0, icon.offset) * 90.0
+            
+        player["binaural"].setAzimuth(azimuth)
+        
+        # Pitch up 1 semitone by increasing playback speed (2**(1/12) ≈ 1.059463)
+        player["sf"].setSpeed(1.059463 if is_center else 1.0)
+        
+        v = volume_override if volume_override is not None else player["vol"]
+        player["amp"].value = v
+        
+        player["sf"].play()
 
     # ── Pulse rate ──────────────────────────────────────────────────
 
     def _pulse_interval(self, distance_m: float) -> float:
         """
-        Map distance → pulse interval (seconds).
+        Map distance -> pulse interval (seconds).
         Exponential curve: floors at 0.25s (not too annoying) and maxes around 2.5s
         """
         distance_m = max(1.0, distance_m)
@@ -431,26 +410,28 @@ class AudioEngine:
             self._pulse_active = False
 
     def _pulse_loop(self):
+        my_thread = threading.current_thread()
         while True:
             with self._lock:
                 active = self._pulse_active
                 icon   = self._current_icon
-            if not active or icon is None:
+                is_current = (my_thread is self._pulse_thread)
+            if not active or icon is None or not is_current:
                 break
             
-            sound_to_play = self.quest_sound_center if icon.direction == "center" else self.quest_sound
-            self._pan_sound(sound_to_play, icon)
+            is_center = (icon.direction == "center")
+            self._play_sound(self.quest, icon, is_center=is_center)
             time.sleep(self._pulse_interval(icon.distance_m))
 
     # ── Treasure earcon ─────────────────────────────────────────────
 
     def play_treasure_earcon(self, icon: NavIcon):
-        self._pan_sound(self.treasure_sound, icon)
+        self._play_sound(self.treasure, icon)
 
     # ── Stockpile earcon ────────────────────────────────────────────
 
     def play_stockpile_earcon(self, icon: NavIcon):
-        self._pan_sound(self.stockpile_sound, icon)
+        self._play_sound(self.stockpile, icon)
 
     # ── Scan mode ───────────────────────────────────────────────────
 
@@ -458,12 +439,8 @@ class AudioEngine:
         """
         Sweep all visible icons left-to-right with audio, then speak
         each icon's location via TTS.
-
-        All icons play at full volume during a scan — the point is identification,
-        not ambient subtlety.  Ambient volume levels (VOLUME_STOCKPILE etc.) only
-        apply to earcons fired during normal gameplay via update().
         """
-        print("\n  📡 SCAN MODE — sweeping compass icons...\n")
+        print("\n  SCAN MODE — sweeping compass icons...\n")
 
         def sort_key(i):
             return -i.offset if i.direction == "left" else i.offset
@@ -472,22 +449,20 @@ class AudioEngine:
 
         for icon in sorted_icons:
             if icon.icon_type == "main_quest":
-                sound_to_play = self.quest_sound_center if icon.direction == "center" else self.quest_sound
-                self._pan_sound(sound_to_play, icon)
+                self._play_sound(self.quest, icon, is_center=(icon.direction == "center"))
             elif icon.icon_type == "treasure":
-                self._pan_sound(self.treasure_sound, icon)
+                self._play_sound(self.treasure, icon)
             elif icon.icon_type == "stockpile":
-                # Override to full volume so it's clearly audible alongside the others
-                self._pan_sound(self.stockpile_sound, icon, volume_override=1.0)
+                self._play_sound(self.stockpile, icon)
 
-            arrow = "←" if icon.direction == "left" else ("→" if icon.direction == "right" else "·")
+            arrow = "<-" if icon.direction == "left" else ("->" if icon.direction == "right" else ".")
             print(f"    {icon.icon_type:<14}  {arrow} {icon.direction:<8}  {icon.distance_m:.0f}m")
             time.sleep(0.65)
 
         time.sleep(0.2)
         for icon in sorted_icons:
             phrase = _build_tts_phrase(icon)
-            print(f"    🔊 \"{phrase}\"")
+            print(f"      \"{phrase}\"")
             self.tts.speak(phrase)
 
 
@@ -540,12 +515,10 @@ class NavigationController:
                 self._last_stockpile_dist = 999.0
 
     def scan(self, icons: list[NavIcon]):
-        """Player-triggered scan — audio sweep + TTS, blocks until fully spoken."""
         self.audio.play_scan(icons)
         self.audio.tts.wait()
 
     def stop(self) -> None:
-        """Stop the quest pulse. Does not clear the TTS queue."""
         self.audio.stop_quest_pulse()
 
 
@@ -581,9 +554,9 @@ def run_demo():
     for scenario_key, description in scenarios:
         icons = generate_test_scenario(scenario_key)
 
-        print(f"  ▶  {description}")
+        print(f"  >  {description}")
         for icon in icons:
-            arrow = "→" if icon.direction == "right" else ("←" if icon.direction == "left" else "·")
+            arrow = "->" if icon.direction == "right" else ("<-" if icon.direction == "left" else ".")
             bar   = _direction_bar(icon.direction, icon.offset)
             print(f"     {icon.icon_type:<14}  {bar}  {icon.distance_m:.0f}m  "
                   f"(pulse every ~{controller.audio._pulse_interval(icon.distance_m):.1f}s)")
@@ -602,8 +575,8 @@ def run_demo():
     controller.scan(all_icons)
 
     print()
-    print("  Demo complete.")
-    pygame.quit()
+    print("  Demo done!")
+    controller.audio.shutdown()
 
 
 def _direction_bar(direction: str, offset: float) -> str:
@@ -618,7 +591,7 @@ def _direction_bar(direction: str, offset: float) -> str:
     pos    = max(0, min(width - 1, pos))
     bar    = ["-"] * width
     bar[center] = "|"
-    bar[pos]    = "●"
+    bar[pos]    = "O"
     return "[" + "".join(bar) + "]"
 
 
