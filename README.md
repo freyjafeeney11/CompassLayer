@@ -1,62 +1,65 @@
 # CompassLayer
 
-A modular, resolution-independent icon detection and navigation system for game HUDs, optimized for AC Shadows.
+A modular, resolution-independent icon detection and navigation system with spatial audio guidance for game HUDs, optimized for AC Shadows.
 
 ## Features
 
-- **Proportion-Based Architecture**: All logic (coordinates, offsets, UI scaling) works on a 0.0 to 1.0 relative scale, ensuring perfect compatibility across different monitor resolutions.
-- **Masked Template Matching**: Supports 4-channel BGRA templates with alpha masks to ignore complex game backgrounds and improve tracking stability.
-- **Smart OCR Interaction**: Dynamically triggers distance extraction (via Tesseract) only when the target is centered to optimize CPU performance.
-- **Adaptive Visualizer**: UI elements (bounding boxes, text) automatically scale their thickness and size based on screen width.
-- **Icon Processing Suite**: Includes a utility to automatically crop, center, and generate alpha masks from raw HUD screenshots.
+- **Spatial Audio Engine**: Real-time HRTF binaural panning with threshold-based earcons and dynamic pulsing for main quests.
+- **Accessibility Integration**: Fully navigable for blind players using French TTS announcements and global hotkeys.
+- **Proportion-Based Architecture**: All UI scaling and detection logic works on a relative scale, ensuring compatibility across different monitor resolutions.
+- **Masked Template Matching**: Supports 4-channel BGRA templates with alpha masks to ignore complex game backgrounds.
 
 ## Project Structure
 
 ```text
-AC_Shadows_Project/
-├── main.py                # Main loop & process orchestrator
+CompassLayer/
+├── run_live.py            # Main live testing loop
+├── package_app.py         # PyInstaller build script
 ├── config.py              # Global settings & icon paths
-├── core/                  # Logical core
-│   ├── screen.py          # Screen capture (mss based)
-│   ├── detector.py        # Masked template matching & NMS
+├── core/                  # Core modules
+│   ├── audiofeedback.py   # Spatial audio & TTS controller
+│   ├── offline_audio.py   # Offline testing renderer
+│   ├── detector.py        # CV multi-scale detection
+│   ├── screen.py          # Screen capture (mss)
 │   └── ocr_engine.py      # Distance parsing (Tesseract)
-├── utils/                 # Utilities
-│   ├── visualizer.py      # Adaptive UI rendering
-│   └── icon_processor.py  # Icon masking & centering tool
-├── scripts/               # Maintenance & Test scripts
-└── assets/                # Icon templates and test screenshots
+├── utils/                 # Utilities (UI Visualizer & Icon Processor)
+└── assets/                # Audio files and Icon templates
 ```
 
 ## Installation
 
-1. Install system dependencies:
-   - **Tesseract OCR**: `brew install tesseract` (macOS) or `sudo apt install tesseract-ocr` (Linux).
+1. Install **Tesseract OCR**: `brew install tesseract` (macOS) or download the Windows installer.
 2. Install Python requirements:
    ```bash
    pip install -r requirements.txt
    ```
+*(Note: requires `pywin32` for optimal TTS sequential delivery, `pyttsx3` is supported as a fallback)*
 
 ## Usage
 
-### 1. Process new icons
-If you have a raw screenshot of an icon:
+### 1. Live Navigation
+Launch the script and switch to your game window:
+```bash
+python run_live.py
+```
+*Tip: Use `--verbose` or `-v` to show frame-by-frame debug output in the terminal.*
+
+**Global Hotkeys:**
+- **`F6`**: Read controls aloud (TTS)
+- **`Shift + F8`**: Trigger Scan Mode (sweeps compass left-to-right)
+- **`Shift + F9`**: Quit application
+
+### 2. Process New Icons
 ```bash
 python utils/icon_processor.py assets/icons/my_icon.png
 ```
-This generates `my_icon_centered.png` with a transparent background.
+Generates `my_icon_centered.png` with a transparent background.
 
-### 2. Run the Navigator
-Update `config.py` with your icon paths and run:
+### 3. Build Executable
 ```bash
-python main.py
+python package_app.py
 ```
-
-## Configuration
-
-Settings in `config.py`:
-- `ROI_HEIGHT_RATIO`: Area of the screen to search (default top 25%).
-- `MATCH_THRESHOLD`: Matching strictness (0.8+ recommended for masked icons).
-- `STRAIGHT_AHEAD_THRESHOLD`: How wide the "Straight" center lane is (default 2% of screen width).
+Compiles a standalone executable to the `dist/` folder.
 
 ## License
 
