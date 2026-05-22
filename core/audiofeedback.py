@@ -204,22 +204,22 @@ class AudioEngine:
         sf.stop()
         sf_mono = sf.mix(1)
         amp = pyo.Sig(volume)
-        pan = pyo.Sig(0.5)
-        panned = pyo.Pan(sf_mono * amp, outs=2, pan=pan).out()
+        azi = pyo.Sig(0.0)
+        panned = pyo.HRTF(sf_mono * amp, azimuth=azi, elevation=0.0).out()
         print(f'  [+] Loaded {filename}')
-        return {'sf': sf, 'pan': pan, 'panned': panned, 'amp': amp, 'vol': volume}
+        return {'sf': sf, 'azi': azi, 'panned': panned, 'amp': amp, 'vol': volume}
 
     def _play_sound(self, player: Optional[dict], icon: NavIcon, volume_override: Optional[float]=None, is_center: bool=False):
         if not player:
             return
         clamped = min(1.0, icon.offset)
         if icon.direction == 'center':
-            pan_pos = 0.5
+            azi_val = 0.0
         elif icon.direction == 'right':
-            pan_pos = 0.5 + clamped * 0.5
+            azi_val = clamped * 90.0
         else:
-            pan_pos = 0.5 - clamped * 0.5
-        player['pan'].value = pan_pos
+            azi_val = -clamped * 90.0
+        player['azi'].value = azi_val
         player['sf'].setSpeed(1.059463 if is_center else 1.0)
         v = volume_override if volume_override is not None else player['vol']
         player['amp'].value = v
@@ -381,6 +381,7 @@ class NavigationController:
         return tightest
 
 def run_demo():
+    controller = NavigationController()
     print('=' * 55)
     print('  AC Shadows — Audio Navigation Tool')
     print('  Accessibility feature demo')

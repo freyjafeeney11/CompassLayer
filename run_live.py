@@ -3,16 +3,45 @@ import time
 import sys
 import msvcrt
 import cv2
+import psutil
+import os
+import csv
 from typing import List, Dict, Any
 from config import TARGET_ICONS, MATCH_THRESHOLD, NMS_IOU_THRESHOLD, STRAIGHT_AHEAD_THRESHOLD, COMPASS_WIDTH_RATIO, ROI_HEIGHT_RATIO, BLUR_KSIZE
 import keyboard
+
 COMPASS_X_START = 0.5 - COMPASS_WIDTH_RATIO / 2
 COMPASS_X_END = 0.5 + COMPASS_WIDTH_RATIO / 2
+
 from core.screen import ScreenCapturer
 from core.detector import IconDetector
 from core.ocr_engine import OCREngine
 from utils.visualizer import Visualizer
 from core.audiofeedback import NavigationController, from_algo_batch
+
+class PerformanceProfiler:
+    def __init__(self, log_file="performance_log.csv"):
+        self.log_file = log_file
+        self.process = psutil.Process(os.getpid())
+        self.data = []
+        self.start_time = time.perf_counter()
+        self.process.cpu_percent()
+        psutil.cpu_percent()
+
+    def log_cycle(self, latency_seconds):
+        current_time = time.perf_counter() - self.start_time
+        app_cpu = self.process.cpu_percent()
+        sys_cpu = psutil.cpu_percent()
+        memory_mb = self.process.memory_info().rss / (1024 * 1024)
+        latency_ms = latency_seconds * 1000
+        self.data.append([current_time, app_cpu, sys_cpu, memory_mb, latency_ms])
+
+    def save(self):
+        with open(self.log_file, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(["Time_s", "App_CPU_Percent", "Sys_CPU_Percent", "Memory_MB", "Latency_ms"])
+            writer.writerows(self.data)
+        print(f"\n[+] Performance data saved to {self.log_file}")
 
 class C:
     RESET = '\x1b[0m'
@@ -25,7 +54,8 @@ class C:
 
 def _ansi(text: str, *codes: str) -> str:
     return ''.join(codes) + text + C.RESET
-BANNER = f'\n{C.CYAN}{C.BOLD}╔══════════════════════════════════════════╗\n║      CompassLayer  •  Live Test Mode     ║\n╚══════════════════════════════════════════╝{C.RESET}\n'
+
+BANNER = f'\n{C.CYAN}{C.BOLD}╔══════════════════════════════════════════╗\n║    CompassLayer  •  Live Test Mode     ║\n╚══════════════════════════════════════════╝{C.RESET}\n'
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description='CompassLayer — real-time screen-capture test runner')
@@ -33,6 +63,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--threshold', type=float, default=None, metavar='T', help=f'Override icon match threshold (default: {MATCH_THRESHOLD})')
     parser.add_argument('--verbose', '-v', action='store_true', help='Print detections every frame instead of only when icons are found.')
     parser.add_argument('--no-audio', action='store_true', help='Disable audio feedback (visual/console debug only).')
+    # === NEW: Profiling flag ===
+    parser.add_argument('--profile', action='store_true', help='Enable performance logging to CSV (CPU, Memory, Latency).')
     return parser.parse_args()
 
 def format_detection(det: Dict[str, Any]) -> str:
@@ -64,6 +96,7 @@ def main() -> None:
     print(_ansi(f'  Match threshold : {threshold}', C.DIM))
     print(_ansi(f'  Audio enabled : {not args.no_audio}', C.DIM))
     print(_ansi(f'  Verbose mode  : {verbose}', C.DIM))
+    print(_ansi(f'  Profiling     : {args.profile}', C.DIM)) # NEW
     print()
     print('Initialising screen capturer...')
     screen_capturer = ScreenCapturer(roi_height_ratio=ROI_HEIGHT_RATIO, monitor_idx=args.monitor)
@@ -75,6 +108,11 @@ def main() -> None:
     ocr_engine = OCREngine()
     print('Initialising visualiser...')
     visualizer = Visualizer()
+   
+    profiler = None
+    if args.profile:
+        print('Initialising performance profiler...')
+
     controller: NavigationController | None = None
     if not args.no_audio:
         print('Initialising audio controller...')
@@ -104,18 +142,23 @@ def main() -> None:
     def on_quit():
         nonlocal request_quit
         request_quit = True
+       
     keyboard.add_hotkey('f6', on_help)
     keyboard.add_hotkey('shift+f8', on_scan)
     keyboard.add_hotkey('shift+f9', on_quit)
     frame_count = 0
     fps_timer = time.perf_counter()
     fps_display = 0.0
+   
     try:
         while True:
+            loop_start = time.perf_counter()
+           
             frame_count += 1
             frame_bgr = screen_capturer.get_frame()
             detections = detector.detect(frame_bgr, screen_width=screen_info['width'], screen_height=screen_info['height'], normalize_fn=screen_capturer.normalize_coord, use_laplacian=True, blur_ksize=BLUR_KSIZE)
             output_list: List[Dict[str, Any]] = []
+           
             for det in detections:
                 icon_x_rel = det['x_rel']
                 icon_y_rel = det['y_rel']
@@ -140,6 +183,7 @@ def main() -> None:
                     dist_text = 'N/A'
                 det['distance'] = dist_text
                 output_list.append({'id': det['id'], 'label': det['label'], 'rel_offset': round(relative_offset, 3), 'direction': direction, 'distance': dist_text})
+               
             if controller:
                 if output_list:
                     output_list.sort(key=lambda x: x.get('score', 0), reverse=True)
@@ -148,6 +192,7 @@ def main() -> None:
                 else:
                     nav_icons = []
                 controller.update(nav_icons)
+               
             if verbose:
                 if output_list:
                     header = _ansi(f'[Frame {frame_count:>6}]  {len(output_list)} icon(s) detected  |  {fps_display:.1f} FPS', C.CYAN)
@@ -156,12 +201,15 @@ def main() -> None:
                         print(format_detection(item))
                 else:
                     print(_ansi(f'[Frame {frame_count:>6}]  — no detections —  {fps_display:.1f} FPS', C.DIM))
+                   
             if frame_count % 30 == 0:
                 elapsed = time.perf_counter() - fps_timer
                 fps_display = 30 / elapsed if elapsed > 0 else 0.0
                 fps_timer = time.perf_counter()
+               
             frame_vis = visualizer.draw_detections(frame_bgr, detections, screen_width=screen_info['width'], screen_height=screen_info['height'])
             visualizer.show(frame_vis)
+           
             if request_quit:
                 break
             if request_scan:
@@ -175,6 +223,7 @@ def main() -> None:
                 if controller:
                     controller.audio.tts.speak("Commandes: F 6 pour entendre ce message. Majuscule F 8 pour balayer. Majuscule F 9 pour quitter le programme.")
                 request_help = False
+               
             if msvcrt.kbhit():
                 key = msvcrt.getch().lower()
                 if key == b'q':
@@ -188,6 +237,10 @@ def main() -> None:
                     verbose = not verbose
                     state = 'ON' if verbose else 'OFF'
                     print(_ansi(f'  [V] Verbose mode {state}', C.DIM))
+
+            if profiler:
+                profiler.log_cycle(time.perf_counter() - loop_start)
+
     except KeyboardInterrupt:
         pass
     except Exception as exc:
@@ -199,8 +252,13 @@ def main() -> None:
             controller.audio.tts.speak('Arret du programme.')
             time.sleep(1.5)
             controller.stop()
+
+        if profiler:
+            profiler.save()
+       
         print('\n  Shutdown complete.')
         print(_ansi(f'\nSession ended. Total frames processed: {frame_count}', C.DIM))
         print(_ansi('All resources released.', C.GREEN))
+
 if __name__ == '__main__':
     main()
