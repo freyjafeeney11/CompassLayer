@@ -5,6 +5,8 @@ import threading
 import os
 from dataclasses import dataclass
 from typing import Optional
+from core import i18n
+
 try:
     import pyttsx3
     TTS_AVAILABLE = True
@@ -54,6 +56,12 @@ class TTSEngine:
         self._active = False
         self._backend = None
         self._fr_voice_token = None
+        self._en_voice_token = None
+        self._current_voice_token = None
+        self._fr_voice_id = None
+        self._en_voice_id = None
+        self.tts_rate: int = 0
+        self.tts_volume: int = 60
         try:
             import win32com.client
             self._backend = 'win32com'
@@ -62,15 +70,14 @@ class TTSEngine:
                 voices = win32com.client.Dispatch('SAPI.SpVoice')
                 token_enum = voices.GetVoices()
                 FR_HINTS = ('hortense', 'paul', ' fr', 'french', 'français')
+                EN_HINTS = ('zira', 'david', ' en', 'english')
                 for i in range(token_enum.Count):
                     token = token_enum.Item(i)
                     desc = token.GetDescription().lower()
-                    if any((hint in desc for hint in FR_HINTS)):
+                    if self._fr_voice_token is None and any((hint in desc for hint in FR_HINTS)):
                         self._fr_voice_token = token
-                        print(f'  [+] TTS voice: {token.GetDescription()}')
-                        break
-                if self._fr_voice_token is None:
-                    print("  [i]  No French SAPI5 voice found — using system default. Install 'Microsoft Hortense Desktop' from Windows language settings.")
+                    if self._en_voice_token is None and any((hint in desc for hint in EN_HINTS)):
+                        self._en_voice_token = token
             except Exception:
                 pass
             print('  [+] TTS engine ready (win32com / SAPI5)')
@@ -85,13 +92,13 @@ class TTSEngine:
                 engine.setProperty('volume', 0.95)
                 voices = engine.getProperty('voices')
                 FR_HINTS = ('hortense', 'paul', 'fr_', 'french', 'français')
+                EN_HINTS = ('zira', 'david', 'en_', 'english')
                 for v in voices:
-                    if any((hint in v.name.lower() or hint in v.id.lower() for hint in FR_HINTS)):
-                        engine.setProperty('voice', v.id)
-                        print(f'  [+] TTS voice: {v.name}')
-                        break
-                else:
-                    print('  [i]  No French voice found in pyttsx3 — using default.')
+                    desc = (v.name + ' ' + v.id).lower()
+                    if self._fr_voice_id is None and any((hint in desc for hint in FR_HINTS)):
+                        self._fr_voice_id = v.id
+                    if self._en_voice_id is None and any((hint in desc for hint in EN_HINTS)):
+                        self._en_voice_id = v.id
                 self._pyttsx3_engine = engine
                 self._backend = 'pyttsx3'
                 self._active = True
@@ -138,44 +145,48 @@ class TTSEngine:
     def _speak_win32(self, phrase: str) -> None:
         import win32com.client
         voice = win32com.client.Dispatch('SAPI.SpVoice')
-        if self._fr_voice_token is not None:
-            voice.Voice = self._fr_voice_token
-        voice.Rate = 0
-        voice.Volume = 60
+        
+        token = self._en_voice_token if i18n.get_lang() == 'en' else self._fr_voice_token
+        if token is not None:
+            voice.Voice = token
+            
+        voice.Rate = self.tts_rate
+        voice.Volume = self.tts_volume
         voice.Speak(phrase, 0)
 
     def _speak_pyttsx3(self, phrase: str) -> None:
+        vid = self._en_voice_id if i18n.get_lang() == 'en' else self._fr_voice_id
+        if vid is not None:
+            self._pyttsx3_engine.setProperty('voice', vid)
+        self._pyttsx3_engine.setProperty('rate', 200 + self.tts_rate * 30)
+        self._pyttsx3_engine.setProperty('volume', self.tts_volume / 100.0)
         self._pyttsx3_engine.say(phrase)
         self._pyttsx3_engine.runAndWait()
 
 def _build_tts_phrase(icon: NavIcon) -> str:
-    if icon.icon_type == 'main_quest':
-        label = 'Objectif principal'
-    elif icon.icon_type == 'treasure':
-        label = 'Trésor'
-    elif icon.icon_type == 'stockpile':
-        label = 'Réserve'
-    else:
-        label = icon.icon_type.replace('_', ' ')
+    label = i18n.get_text(icon.icon_type)
     if icon.direction == 'center' or icon.offset < 0.05:
-        position = 'droit devant'
+        position = i18n.get_text('straight')
     else:
-        side = 'gauche' if icon.direction == 'left' else 'droite'
+        side_key = 'left' if icon.direction == 'left' else 'right'
+        side = i18n.get_text(side_key)
         if icon.offset > 0.55:
-            position = f'loin à {side}'
+            position = i18n.get_text('far_to', side=side)
         elif icon.offset > 0.25:
-            position = f'à {side}'
+            position = i18n.get_text('to_side', side=side)
         else:
-            position = f'légèrement à {side}'
+            position = i18n.get_text('slightly_to', side=side)
+            
     dist = int(icon.distance_m) if icon.distance_m is not None else 0
-    distance = f"à {dist} mètre{('s' if dist != 1 else '')}"
-    suffix = ', contient du bois, des cultures ou des minéraux' if icon.icon_type == 'stockpile' else ''
+    plural = 's' if dist != 1 and i18n.get_lang() == 'fr' else 's' if dist != 1 else ''
+    distance = i18n.get_text('meters', dist=dist, plural=plural)
+    suffix = i18n.get_text('contains_resources') if icon.icon_type == 'stockpile' else ''
     return f'{label}, {position}, {distance}{suffix}'
 
 class AudioEngine:
     SAMPLE_RATE = 44100
     VOLUME_QUEST = 0.8
-    VOLUME_TREASURE = 2.5
+    VOLUME_TREASURE = 3.5
     VOLUME_STOCKPILE = 0.15
 
     def __init__(self):
@@ -187,6 +198,8 @@ class AudioEngine:
         self.treasure = self._load(os.path.join(audio_dir, 'koto_trill.wav'), self.VOLUME_TREASURE)
         self.stockpile = self._load(os.path.join(audio_dir, 'koto_stockpile.wav'), self.VOLUME_STOCKPILE)
         self.tts = TTSEngine()
+        self.pulse_rate_multiplier: float = 1.0
+        self.ping_volume_multiplier: float = 1.0
         self._pulse_active = False
         self._pulse_thread: Optional[threading.Thread] = None
         self._current_icon: Optional[NavIcon] = None
@@ -209,7 +222,7 @@ class AudioEngine:
         print(f'  [+] Loaded {filename}')
         return {'sf': sf, 'azi': azi, 'panned': panned, 'amp': amp, 'vol': volume}
 
-    def _play_sound(self, player: Optional[dict], icon: NavIcon, volume_override: Optional[float]=None, is_center: bool=False):
+    def _play_sound(self, player: Optional[dict], icon: NavIcon, volume_override: Optional[float]=None, is_center: bool=False, is_almost_center: bool=False):
         if not player:
             return
         clamped = min(1.0, icon.offset)
@@ -220,14 +233,19 @@ class AudioEngine:
         else:
             azi_val = -clamped * 90.0
         player['azi'].value = azi_val
-        player['sf'].setSpeed(1.059463 if is_center else 1.0)
+        if is_center:
+            player['sf'].setSpeed(1.059463)
+        elif is_almost_center:
+            player['sf'].setSpeed(1.029302)
+        else:
+            player['sf'].setSpeed(1.0)
         v = volume_override if volume_override is not None else player['vol']
-        player['amp'].value = v
+        player['amp'].value = v * self.ping_volume_multiplier
         player['sf'].play()
 
     def _pulse_interval(self, distance_m: float) -> float:
-        interval = 2.5 * (distance_m / 100.0) ** 0.8
-        return round(max(0.25, min(3.0, interval)), 2)
+        interval = 2.5 * (distance_m / 100.0) ** 0.8 * self.pulse_rate_multiplier
+        return round(max(0.25, min(6.0, interval)), 2)
 
     def start_quest_pulse(self, icon: NavIcon):
         with self._lock:
@@ -255,7 +273,8 @@ class AudioEngine:
             if not active or icon is None or (not is_current):
                 break
             is_center = icon.direction == 'center'
-            self._play_sound(self.quest, icon, is_center=is_center)
+            is_almost_center = abs(icon.offset) <= 0.1 and not is_center
+            self._play_sound(self.quest, icon, is_center=is_center, is_almost_center=is_almost_center)
             time.sleep(self._pulse_interval(icon.distance_m))
 
     def play_treasure_earcon(self, icon: NavIcon):
@@ -336,7 +355,7 @@ class NavigationController:
                 if not self._quest_arrived:
                     self._quest_arrived = True
                     self.audio.stop_quest_pulse()
-                    self.audio.tts.speak("Vous êtes arrivé à l'objectif.")
+                    self.audio.tts.speak(i18n.get_text('arrived'))
             else:
                 if self._quest_arrived and quest.distance_m is not None and (quest.distance_m > 8.0):
                     self._quest_arrived = False

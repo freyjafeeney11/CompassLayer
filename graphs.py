@@ -10,7 +10,6 @@ def generate_performance_graphs(csv_file="performance_log.csv"):
         print(f"Could not find {csv_file}. Run your main app first!")
         return
 
-    # Use seaborn for a beautiful modern theme
     sns.set_theme(style="whitegrid", palette="pastel")
     
     fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 16))
@@ -20,8 +19,7 @@ def generate_performance_graphs(csv_file="performance_log.csv"):
     app_cpu_norm = df['App_CPU_Percent'] / cpu_count
     base_cpu = (df['Sys_CPU_Percent'] - app_cpu_norm).clip(lower=0)
     
-    # Beautiful colors for the stackplot
-    colors = sns.color_palette("muted")
+    colors = sns.color_palette("husl", 3)
     ax1.stackplot(df['Time_s'], base_cpu, app_cpu_norm, 
                   labels=['Base System (Game + OS)', 'CompassLayer Overhead'],
                   colors=[colors[0], colors[3]], alpha=0.85)

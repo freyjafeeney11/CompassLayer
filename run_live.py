@@ -18,6 +18,8 @@ from core.detector import IconDetector
 from core.ocr_engine import OCREngine
 from utils.visualizer import Visualizer
 from core.audiofeedback import NavigationController, from_algo_batch
+from core.settings import SettingsMenu
+from core import i18n
 
 class PerformanceProfiler:
     def __init__(self, log_file="performance_log.csv"):
@@ -63,7 +65,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument('--threshold', type=float, default=None, metavar='T', help=f'Override icon match threshold (default: {MATCH_THRESHOLD})')
     parser.add_argument('--verbose', '-v', action='store_true', help='Print detections every frame instead of only when icons are found.')
     parser.add_argument('--no-audio', action='store_true', help='Disable audio feedback (visual/console debug only).')
-    # === NEW: Profiling flag ===
     parser.add_argument('--profile', action='store_true', help='Enable performance logging to CSV (CPU, Memory, Latency).')
     return parser.parse_args()
 
@@ -96,7 +97,7 @@ def main() -> None:
     print(_ansi(f'  Match threshold : {threshold}', C.DIM))
     print(_ansi(f'  Audio enabled : {not args.no_audio}', C.DIM))
     print(_ansi(f'  Verbose mode  : {verbose}', C.DIM))
-    print(_ansi(f'  Profiling     : {args.profile}', C.DIM)) # NEW
+    print(_ansi(f'  Profiling     : {args.profile}', C.DIM))
     print()
     print('Initialising screen capturer...')
     screen_capturer = ScreenCapturer(roi_height_ratio=ROI_HEIGHT_RATIO, monitor_idx=args.monitor)
@@ -118,11 +119,12 @@ def main() -> None:
         print('Initialising audio controller...')
         controller = NavigationController()
         print(_ansi('  [+] TTS engine ready (win32com / SAPI5)', C.DIM))
-        controller.audio.tts.speak('Lancement de Compass Layer. Appuyez sur F6 pour entendre les commandes.')
+        controller.audio.tts.speak(i18n.get_text('startup_msg'))
     print()
     print(_ansi('  All systems ready.  Switch to the game window now.', C.BOLD))
     print(_ansi('  Global Hotkeys:', C.CYAN))
     print(_ansi('    [F6]          Read Controls', C.CYAN))
+    print(_ansi('    [F7]          Settings Menu', C.CYAN))
     print(_ansi('    [Shift + F8]  Scan / Sweep', C.CYAN))
     print(_ansi('    [Shift + F9]  Exit Application', C.CYAN))
     print()
@@ -130,6 +132,16 @@ def main() -> None:
     request_scan = False
     request_quit = False
     request_help = False
+    request_settings = False
+    settings_menu = SettingsMenu()
+
+    def _apply_settings():
+        if controller:
+            i18n.set_lang(settings_menu.language_code)
+            controller.audio.tts.tts_volume = settings_menu.tts_volume
+            controller.audio.tts.tts_rate = settings_menu.tts_speed
+            controller.audio.pulse_rate_multiplier = settings_menu.pulse_rate
+            controller.audio.ping_volume_multiplier = settings_menu.ping_volume
 
     def on_help():
         nonlocal request_help
@@ -142,8 +154,37 @@ def main() -> None:
     def on_quit():
         nonlocal request_quit
         request_quit = True
+
+    def on_settings():
+        nonlocal request_settings
+        request_settings = True
+
+    def on_up():
+        if settings_menu.active and controller:
+            controller.audio.tts.speak(settings_menu.prev_item().announce())
+            
+    def on_down():
+        if settings_menu.active and controller:
+            controller.audio.tts.speak(settings_menu.next_item().announce())
+            
+    def on_left():
+        if settings_menu.active and controller:
+            settings_menu.current.decrease()
+            _apply_settings()
+            controller.audio.tts.speak(str(settings_menu.current.value))
+            
+    def on_right():
+        if settings_menu.active and controller:
+            settings_menu.current.increase()
+            _apply_settings()
+            controller.audio.tts.speak(str(settings_menu.current.value))
        
     keyboard.add_hotkey('f6', on_help)
+    keyboard.add_hotkey('f7', on_settings)
+    keyboard.add_hotkey('up', on_up)
+    keyboard.add_hotkey('down', on_down)
+    keyboard.add_hotkey('left', on_left)
+    keyboard.add_hotkey('right', on_right)
     keyboard.add_hotkey('shift+f8', on_scan)
     keyboard.add_hotkey('shift+f9', on_quit)
     frame_count = 0
@@ -184,7 +225,7 @@ def main() -> None:
                 det['distance'] = dist_text
                 output_list.append({'id': det['id'], 'label': det['label'], 'rel_offset': round(relative_offset, 3), 'direction': direction, 'distance': dist_text, 'score': det['score']})
                
-            if controller:
+            if controller and not settings_menu.active:
                 if output_list:
                     best_per_type = {}
                     for item in output_list:
@@ -221,10 +262,23 @@ def main() -> None:
                     nav_icons = from_algo_batch(output_list)
                     controller.scan(nav_icons)
                 request_scan = False
+            if request_settings:
+                settings_menu.active = not settings_menu.active
+                if settings_menu.active:
+                    print(_ansi('\n  [SETTINGS] Menu opened', C.CYAN))
+                    if controller:
+                        controller.stop()
+                        controller.audio.tts.speak(i18n.get_text('menu_opened'))
+                        controller.audio.tts.speak(settings_menu.current.announce())
+                else:
+                    print(_ansi('\n  [SETTINGS] Menu closed', C.CYAN))
+                    if controller:
+                        controller.audio.tts.speak(i18n.get_text('menu_closed'))
+                request_settings = False
             if request_help:
                 print(_ansi('\n  [HELP] Global hotkey triggered...', C.CYAN))
                 if controller:
-                    controller.audio.tts.speak("Commandes: F 6 pour entendre ce message. Majuscule F 8 pour balayer. Majuscule F 9 pour quitter le programme.")
+                    controller.audio.tts.speak(i18n.get_text('help_controls'))
                 request_help = False
                
             if msvcrt.kbhit():

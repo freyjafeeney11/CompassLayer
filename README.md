@@ -5,7 +5,8 @@ A modular, resolution-independent icon detection and navigation system with spat
 ## Features
 
 - **Spatial Audio Engine**: Real-time HRTF binaural panning with threshold-based earcons and dynamic pulsing for main quests.
-- **Accessibility Integration**: Fully navigable for blind players using French TTS announcements and global hotkeys.
+- **Accessibility Integration**: Fully navigable for blind players using French and English TTS announcements, and global hotkeys.
+- **In-Game Settings Menu**: Live F7 menu to adjust ping volume, ping rate, TTS speed, TTS volume, and language without leaving the game.
 - **Proportion-Based Architecture**: All UI scaling and detection logic works on a relative scale, ensuring compatibility across different monitor resolutions.
 - **Masked Template Matching**: Supports 4-channel BGRA templates with alpha masks to ignore complex game backgrounds.
 
@@ -21,6 +22,8 @@ CompassLayer/
 │   ├── offline_audio.py   # Offline testing renderer
 │   ├── detector.py        # CV multi-scale detection
 │   ├── screen.py          # Screen capture (mss)
+│   ├── settings.py        # Runtime settings logic
+│   ├── i18n.py            # Bilingual translation dictionary
 │   └── ocr_engine.py      # Distance parsing (Tesseract)
 ├── utils/                 # Utilities (UI Visualizer & Icon Processor)
 └── assets/                # Audio files and Icon templates
@@ -46,6 +49,7 @@ python run_live.py
 
 **Global Hotkeys:**
 - **`F6`**: Read controls aloud (TTS)
+- **`F7`**: Open/Close Settings Menu (use Arrow Keys to navigate and adjust)
 - **`Shift + F8`**: Trigger Scan Mode (sweeps compass left-to-right)
 - **`Shift + F9`**: Quit application
 
