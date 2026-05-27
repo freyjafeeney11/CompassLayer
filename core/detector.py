@@ -63,8 +63,6 @@ class IconDetector:
             search_frame = cv2.GaussianBlur(frame_bgr, blur_ksize, 0)
         else:
             search_frame = frame_bgr
-        if use_laplacian:
-            search_frame = self._apply_laplacian(search_frame)
         for label, tmpl_list in self.templates.items():
             boxes = []
             scores = []
@@ -73,17 +71,13 @@ class IconDetector:
                 template_bgr = tmpl_data['image']
                 mask = tmpl_data['mask']
                 th, tw = (tmpl_data['h'], tmpl_data['w'])
-                if use_laplacian and mask is None:
-                    search_template = self._apply_laplacian(template_bgr)
-                    res = cv2.matchTemplate(search_frame, search_template, cv2.TM_CCOEFF_NORMED)
-                    loc = np.where(res >= self.match_threshold)
-                elif mask is not None:
+                if mask is not None:
                     res = cv2.matchTemplate(frame_bgr, template_bgr, cv2.TM_CCORR_NORMED, mask=mask)
                     res = np.nan_to_num(res, nan=-1.0)
-                    loc = np.where(res >= self.match_threshold)
+                    res[res > 1.1] = -1.0
                 else:
-                    res = cv2.matchTemplate(frame_bgr, template_bgr, cv2.TM_CCOEFF_NORMED)
-                    loc = np.where(res >= self.match_threshold)
+                    res = cv2.matchTemplate(search_frame, template_bgr, cv2.TM_CCOEFF_NORMED)
+                loc = np.where(res >= self.match_threshold)
                 for pt in zip(*loc[::-1]):
                     boxes.append([int(pt[0]), int(pt[1]), int(tw), int(th)])
                     scores.append(float(res[pt[1], pt[0]]))

@@ -182,13 +182,16 @@ def main() -> None:
                 else:
                     dist_text = 'N/A'
                 det['distance'] = dist_text
-                output_list.append({'id': det['id'], 'label': det['label'], 'rel_offset': round(relative_offset, 3), 'direction': direction, 'distance': dist_text})
+                output_list.append({'id': det['id'], 'label': det['label'], 'rel_offset': round(relative_offset, 3), 'direction': direction, 'distance': dist_text, 'score': det['score']})
                
             if controller:
                 if output_list:
-                    output_list.sort(key=lambda x: x.get('score', 0), reverse=True)
-                    best_icon = [output_list[0]]
-                    nav_icons = from_algo_batch(best_icon)
+                    best_per_type = {}
+                    for item in output_list:
+                        lbl = item['label']
+                        if lbl not in best_per_type or item['score'] > best_per_type[lbl]['score']:
+                            best_per_type[lbl] = item
+                    nav_icons = from_algo_batch(list(best_per_type.values()))
                 else:
                     nav_icons = []
                 controller.update(nav_icons)
