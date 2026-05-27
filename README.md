@@ -64,7 +64,3 @@ Generates `my_icon_centered.png` with a transparent background.
 python package_app.py
 ```
 Compiles a standalone executable to the `dist/` folder.
-
-## License
-
-MIT
